@@ -1,0 +1,7 @@
+{
+  "name": "WardrobeX – AI Powered 3D Immersive Virtual Try-On Platform",
+  "description": "A luxury boutique experience featuring a 3D immersive store, AI-powered virtual try-on, and personalized fashion recommendations using Gemini API.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
