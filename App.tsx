@@ -299,9 +299,12 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-charcoal text-ivory">
-      <header className="fixed top-8 left-0 w-full z-50 px-8 md:px-20 pointer-events-none">
-        <div className="max-w-[1400px] mx-auto flex items-center justify-between">
+    <div className="min-h-screen bg-atelier text-ivory relative overflow-hidden">
+      <div className="absolute -top-40 -left-20 w-[500px] h-[500px] rounded-full bg-rose-gold/10 blur-[90px] animate-[floaty_10s_ease-in-out_infinite]" />
+      <div className="absolute top-1/3 -right-32 w-[520px] h-[520px] rounded-full bg-amber-300/10 blur-[110px] animate-[floaty_12s_ease-in-out_infinite]" />
+      <div className="grain" />
+      <header className="fixed top-6 left-0 w-full z-50 px-6 md:px-20 pointer-events-none">
+        <div className="relative max-w-[1400px] mx-auto flex items-center justify-between py-3">
           <button onClick={() => setView('HOME')} className="flex items-center gap-3 text-rose-gold group pointer-events-auto">
             <div className="w-12 h-12 glass border-rose-gold/20 rounded-2xl flex items-center justify-center group-hover:bg-rose-gold group-hover:text-white transition-all duration-500 shadow-2xl">
               <Crown className="w-6 h-6" />
@@ -311,7 +314,7 @@ const App: React.FC = () => {
               <span className="text-[8px] uppercase tracking-[0.5em] text-neutral-500">Elite Couture AI</span>
             </div>
           </button>
-          <nav className="hidden md:flex items-center gap-2 pointer-events-auto glass p-2 rounded-full border-white/5 backdrop-blur-2xl shadow-2xl">
+          <nav className="hidden md:flex items-center gap-2 pointer-events-auto rounded-full border border-white/10 bg-black/40 backdrop-blur-2xl shadow-[0_20px_60px_rgba(0,0,0,0.45)] p-2">
             <NavBtn icon={<Shirt className="w-4 h-4" />} label="Studio" active={view === 'STUDIO'} onClick={() => setView('STUDIO')} />
             <NavBtn icon={<Heart className="w-4 h-4" />} label="Atelier" active={view === 'WARDROBE' || view === 'FAVORITES'} onClick={() => setView('WARDROBE')} />
             <NavBtn icon={<Sparkles className="w-4 h-4" />} label="Intelligence" active={view === 'PICKS'} onClick={() => setView('PICKS')} />
@@ -321,6 +324,7 @@ const App: React.FC = () => {
               <LogOut className="w-4 h-4" />
             </button>
           </nav>
+          <div className="absolute inset-0 -z-10 rounded-[32px] bg-black/30 backdrop-blur-2xl border border-white/5 shadow-[0_25px_80px_rgba(0,0,0,0.55)] pointer-events-none" />
         </div>
       </header>
       <main className={`min-h-screen ${view === 'HOME' ? 'pt-0' : 'pt-32'}`}>

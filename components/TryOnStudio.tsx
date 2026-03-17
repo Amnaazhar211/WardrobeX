@@ -14,6 +14,77 @@ const PlaneGeometry = 'planeGeometry' as any;
 const AmbientLight = 'ambientLight' as any;
 const PointLight = 'pointLight' as any;
 
+const isRemoteUrl = (value: string) => /^https?:\/\//i.test(value);
+
+const dataUrlSizeBytes = (dataUrl: string) => {
+  const base64 = dataUrl.split(',')[1] || '';
+  return Math.ceil((base64.length * 3) / 4);
+};
+
+const resizeImage = async (
+  dataUrl: string,
+  maxSize = 768,
+  quality = 0.8,
+  maxBytes = 800 * 1024
+): Promise<string> => {
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const { width, height } = img;
+      const scale = Math.min(1, maxSize / width, maxSize / height);
+      let targetW = Math.round(width * scale);
+      let targetH = Math.round(height * scale);
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Failed to resize image'));
+        return;
+      }
+
+      const render = (w: number, h: number, q: number) => {
+        canvas.width = w;
+        canvas.height = h;
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        return canvas.toDataURL('image/jpeg', q);
+      };
+
+      let currentQuality = quality;
+      let out = render(targetW, targetH, currentQuality);
+
+      while (dataUrlSizeBytes(out) > maxBytes && currentQuality > 0.55) {
+        currentQuality -= 0.05;
+        out = render(targetW, targetH, currentQuality);
+      }
+
+      while (dataUrlSizeBytes(out) > maxBytes && targetW > 420 && targetH > 420) {
+        targetW = Math.round(targetW * 0.85);
+        targetH = Math.round(targetH * 0.85);
+        out = render(targetW, targetH, currentQuality);
+      }
+
+      resolve(out);
+    };
+    img.onerror = () => reject(new Error('Failed to load image for resize'));
+    img.src = dataUrl;
+  });
+};
+
+const toDataUrl = async (url: string): Promise<string> => {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image (${response.status})`);
+  }
+  const blob = await response.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('Failed to read image data'));
+    reader.readAsDataURL(blob);
+  });
+};
+
 // --- Fabric Simulation Component ---
 const FabricPhysicsPreview = ({ color = "#B76E79", textureUrl, materialType }: { color?: string, textureUrl?: string, materialType?: string }) => {
   const meshRef = useRef<THREE.Mesh>(null);
@@ -112,9 +183,24 @@ const TryOnStudio: React.FC<Props> = ({ onBack, onSave, collection, onKeyError, 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [physicsMode, setPhysicsMode] = useState(false);
   const [clothingAnalysis, setClothingAnalysis] = useState<{ primaryColor: string, materialType: string, clothingType: string } | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [progressLabel, setProgressLabel] = useState('');
+  const [processingStage, setProcessingStage] = useState<'analysis' | 'tryon' | null>(null);
 
   const bodyInputRef = useRef<HTMLInputElement>(null);
   const clothingInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isProcessing || !processingStage) return;
+    const cap = processingStage === 'analysis' ? 92 : 99;
+    const timer = window.setInterval(() => {
+      setProgress((p) => {
+        const bump = processingStage === 'analysis' ? 4 : 1.2;
+        return Math.min(p + bump + Math.random() * bump, cap);
+      });
+    }, 220);
+    return () => window.clearInterval(timer);
+  }, [isProcessing, processingStage]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, setter: (val: string) => void, isClothing: boolean = false) => {
     const file = e.target.files?.[0];
@@ -122,11 +208,16 @@ const TryOnStudio: React.FC<Props> = ({ onBack, onSave, collection, onKeyError, 
       const reader = new FileReader();
       reader.onloadend = async () => {
         const base64 = reader.result as string;
-        setter(base64);
+        const resized = await resizeImage(base64);
+        setter(resized);
         if (isClothing) {
           setIsProcessing(true);
+          setErrorMsg(null);
+          setProcessingStage('analysis');
+          setProgress(10);
+          setProgressLabel('Analyzing garment');
           try {
-            const analysis = await GeminiService.analyzeClothingFor3D(base64);
+            const analysis = await GeminiService.analyzeClothingFor3D(resized);
             setClothingAnalysis(analysis);
             setPhysicsMode(true);
             if (onSelectClothing) {
@@ -134,13 +225,17 @@ const TryOnStudio: React.FC<Props> = ({ onBack, onSave, collection, onKeyError, 
                 id: `upload-${Date.now()}`,
                 name: 'Custom Upload',
                 category: 'Custom',
-                imageUrl: base64,
+                imageUrl: resized,
                 price: 'Bespoke'
               });
             }
           } catch (err) {
             console.error("Analysis error:", err);
+            setErrorMsg("Failed to analyze the garment. Please try another image.");
           } finally {
+            setProgress(100);
+            setProgressLabel('Ready');
+            setProcessingStage(null);
             setIsProcessing(false);
           }
         }
@@ -153,13 +248,27 @@ const TryOnStudio: React.FC<Props> = ({ onBack, onSave, collection, onKeyError, 
     if (!bodyImage || !clothingImage) return;
     setIsProcessing(true);
     setErrorMsg(null);
+    setProcessingStage('tryon');
+    setProgress(5);
+    setProgressLabel('Preparing images');
     try {
-      const result = await GeminiService.performVirtualTryOn(bodyImage, clothingImage);
+      const bodyDataRaw = isRemoteUrl(bodyImage) ? await toDataUrl(bodyImage) : bodyImage;
+      const clothingDataRaw = isRemoteUrl(clothingImage) ? await toDataUrl(clothingImage) : clothingImage;
+      setProgress(25);
+      setProgressLabel('Optimizing for speed');
+      const bodyData = await resizeImage(bodyDataRaw);
+      const clothingData = await resizeImage(clothingDataRaw);
+      setProgress(40);
+      setProgressLabel('Neural fitting in progress');
+      const result = await GeminiService.performVirtualTryOn(bodyData, clothingData);
       setResultImage(result);
+      setProgress(95);
+      setProgressLabel('Finalizing render');
       
       try {
-        const recs = await GeminiService.getStyleRecommendations(result);
-        setRecommendations(recs);
+        GeminiService.getStyleRecommendations(result)
+          .then((recs) => setRecommendations(recs))
+          .catch((recError) => console.warn("Style recommendations failed, but try-on succeeded:", recError));
       } catch (recError) {
         console.warn("Style recommendations failed, but try-on succeeded:", recError);
       }
@@ -176,6 +285,9 @@ const TryOnStudio: React.FC<Props> = ({ onBack, onSave, collection, onKeyError, 
         setErrorMsg(`Atelier Error: ${msg.split('.')[0]}. Please ensure your images are clear and try again.`);
       }
     } finally {
+      setProgress(100);
+      setProgressLabel('Complete');
+      setProcessingStage(null);
       setIsProcessing(false);
     }
   };
@@ -296,17 +408,29 @@ const TryOnStudio: React.FC<Props> = ({ onBack, onSave, collection, onKeyError, 
                       <button 
                         key={item.id}
                         onClick={async () => {
-                          setClothingImage(item.imageUrl);
                           setShowCollection(false);
                           setIsProcessing(true);
-                          if (onSelectClothing) onSelectClothing(item);
+                          setErrorMsg(null);
+                          setProcessingStage('analysis');
+                          setProgress(10);
+                          setProgressLabel('Loading selection');
                           try {
-                            const analysis = await GeminiService.analyzeClothingFor3D(item.imageUrl);
+                            const dataUrlRaw = isRemoteUrl(item.imageUrl) ? await toDataUrl(item.imageUrl) : item.imageUrl;
+                            const dataUrl = await resizeImage(dataUrlRaw);
+                            setClothingImage(dataUrl);
+                            if (onSelectClothing) {
+                              onSelectClothing({ ...item, imageUrl: dataUrl });
+                            }
+                            const analysis = await GeminiService.analyzeClothingFor3D(dataUrl);
                             setClothingAnalysis(analysis);
                             setPhysicsMode(true);
                           } catch (err) {
                             console.error("Analysis error:", err);
+                            setErrorMsg("Failed to load the selected item. Please try another.");
                           } finally {
+                            setProgress(100);
+                            setProgressLabel('Ready');
+                            setProcessingStage(null);
                             setIsProcessing(false);
                           }
                         }}
@@ -396,6 +520,25 @@ const TryOnStudio: React.FC<Props> = ({ onBack, onSave, collection, onKeyError, 
                         <Wind className="w-3 h-3 text-neutral-500" />
                         <span className="text-[10px] text-neutral-400 uppercase tracking-widest">Wind Resistance: 0.12 Pa</span>
                      </div>
+                     {clothingAnalysis && (
+                       <div className="glass px-4 py-3 rounded-2xl border-rose-gold/20 space-y-2 max-w-xs">
+                         <p className="text-[9px] text-neutral-500 uppercase tracking-widest">Material & Texture</p>
+                         <div className="flex items-center gap-3">
+                           <div
+                             className="w-5 h-5 rounded-full border border-white/10"
+                             style={{ backgroundColor: clothingAnalysis.primaryColor || '#B76E79' }}
+                           />
+                           <div className="flex flex-col">
+                             <span className="text-[11px] text-white uppercase tracking-widest font-semibold">
+                               {clothingAnalysis.materialType || 'Unknown material'}
+                             </span>
+                             <span className="text-[10px] text-neutral-400 uppercase tracking-widest">
+                               {clothingAnalysis.clothingType || 'Unknown type'}
+                             </span>
+                           </div>
+                         </div>
+                       </div>
+                     )}
                   </div>
                   
                   <div className="absolute bottom-8 left-1/2 -translate-x-1/2 glass px-6 py-3 rounded-2xl border-rose-gold/10 flex items-center gap-4 animate-bounce">
@@ -421,9 +564,27 @@ const TryOnStudio: React.FC<Props> = ({ onBack, onSave, collection, onKeyError, 
                       <div className="absolute inset-0 border-4 border-t-rose-gold rounded-full animate-spin" />
                       <Sparkles className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 text-rose-gold animate-pulse" />
                    </div>
-                   <div className="space-y-2">
-                     <p className="text-xl serif text-white">Neural Fitting in Progress</p>
-                     <p className="text-xs text-neutral-400 uppercase tracking-[0.3em]">Analyzing fabric physics and lighting</p>
+                   <div className="space-y-4 w-full">
+                     <div className="space-y-2">
+                       <p className="text-xl serif text-white">
+                         {processingStage === 'analysis' ? 'Analyzing Garment' : 'Neural Fitting in Progress'}
+                       </p>
+                       <p className="text-xs text-neutral-400 uppercase tracking-[0.3em]">
+                         {progressLabel || 'Preparing'}
+                       </p>
+                     </div>
+                     <div className="w-full">
+                       <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-neutral-500 mb-2">
+                         <span>Progress</span>
+                         <span className="text-rose-gold font-bold">{Math.round(progress)}%</span>
+                       </div>
+                       <div className="h-2 bg-neutral-800 rounded-full overflow-hidden">
+                         <div
+                           className="h-full bg-rose-gold transition-all duration-300"
+                           style={{ width: `${Math.round(progress)}%` }}
+                         />
+                       </div>
+                     </div>
                    </div>
                 </div>
               </div>
